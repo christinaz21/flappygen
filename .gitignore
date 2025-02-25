@@ -1,0 +1,13 @@
+/models
+data
+outputs/
+/tmp
+vae/
+
+__pycache__/
+*.out
+*.log
+*.safetensors
+*.mp4
+*.jsonl
+*.bin
