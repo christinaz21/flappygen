@@ -36,7 +36,7 @@ tar -xzvf data/flappy_bird.tar.gz -C data/
 
 1. Set `CUDA_VISIBLE_DEVICES` in `train_oasis/main.py`.
 2. Set `config_path` and `config_name` in `train_oasis/main.py`
-3. Download vae ckpt (`vit-l-20.safetensors` from [here](https://huggingface.co/Etched/oasis-500m/tree/main)), put it under dir `vae/`, and make sure the vae_ckpt in `config/algorithm/df_video.yaml` to the path of the vae ckpt.
+<!-- 3. (NO NEED) Download vae ckpt (`vit-l-20.safetensors` from [here](https://huggingface.co/Etched/oasis-500m/tree/main)), put it under dir `vae/`, and make sure the vae_ckpt in `config/algorithm/df_video.yaml` to the path of the vae ckpt. -->
 4. Set config in `config/dataset/flappy_bird_fast.yaml`: save_dir should be the path to the flappy bird dataset
 5. Set some config in `config/flappy_bird.yaml`: 
 
