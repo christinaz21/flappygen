@@ -11,3 +11,9 @@ __pycache__/
 *.mp4
 *.jsonl
 *.bin
+
+
+colored/flappy-bird-gym/
+colored/OminiControl/
+oasis/
+Miniconda3-latest-Linux-x86_64.sh

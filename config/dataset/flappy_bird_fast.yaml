@@ -1,6 +1,6 @@
 debug: ${debug} # inherited from configurations/config.yaml
 
-save_dir: data/flappy_bird
+save_dir: data/flappy_bird_color
 n_frames: 10 # TODO: increase later
 validation_size: 10
 h: &h 512

@@ -1,0 +1,12 @@
+Traceback (most recent call last):
+  File "train_flappy.py", line 90, in <module>
+    model = PPO(
+  File "/home/cz5047/miniconda3/envs/flappy-env/lib/python3.8/site-packages/stable_baselines3/ppo/ppo.py", line 94, in __init__
+    super(PPO, self).__init__(
+  File "/home/cz5047/miniconda3/envs/flappy-env/lib/python3.8/site-packages/stable_baselines3/common/on_policy_algorithm.py", line 77, in __init__
+    super(OnPolicyAlgorithm, self).__init__(
+  File "/home/cz5047/miniconda3/envs/flappy-env/lib/python3.8/site-packages/stable_baselines3/common/base_class.py", line 106, in __init__
+    self.policy_class = get_policy_from_name(policy_base, policy)
+  File "/home/cz5047/miniconda3/envs/flappy-env/lib/python3.8/site-packages/stable_baselines3/common/policies.py", line 914, in get_policy_from_name
+    raise KeyError(
+KeyError: "Error: unknown policy type checkpoints/flappy_checkpoint2_3000000_steps.zip,the only registed policy type are: ['MlpPolicy', 'CnnPolicy', 'MultiInputPolicy']!"

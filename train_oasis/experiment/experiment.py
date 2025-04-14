@@ -101,6 +101,15 @@ class VideoPredictionExperiment:
             print("Shuffling data")
         else:
             print("Not shuffling data")
+        # print("train dataset", train_dataset)
+        # print("batch size: ", self.cfg.training.batch_size)
+        # print("dataset length ", dir(train_dataset))
+        # print("Type of train_dataset:", type(train_dataset))
+        # print("length", train_dataset.__len__()) 
+        # print(train_dataset.get_data_lengths())
+        # print(train_dataset.total_len)
+        # print("Dataset paths:", train_dataset.data_paths)
+
         if train_dataset:
             return torch.utils.data.DataLoader(
                 train_dataset,

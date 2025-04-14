@@ -69,7 +69,7 @@ def main(args):
     model = model.to(device).eval()
 
     # load VAE checkpoint
-    vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema")
+    vae = AutoencoderKL.from_pretrained("models/sd-vae-ft-ema")
     vae = vae.to(device, dtype=dtype).eval()
 
     # sampling params
@@ -87,7 +87,13 @@ def main(args):
 
     # get prompt image/video
     action_path = Path(args.actions_path)
+    video_path = Path("colored/videos/flappy_bird_night.mp4")
+    assert video_path.exists(), f"File not found: {video_path}"
+
     prompt = read_video(action_path.with_suffix(".mp4"), pts_unit="sec")[0]
+    prompt = read_video(video_path, pts_unit="sec")[0]
+    print("prompt: ", prompt.shape)
+    #print("prompt2: ", prompt2.shape)
     if args.video_offset is not None:
         prompt = prompt[args.video_offset:]
     prompt = prompt[:n_prompt_frames]
@@ -206,6 +212,7 @@ def main(args):
 
 if __name__ == "__main__":
     parse = argparse.ArgumentParser()
+    print("parsing args")
 
     parse.add_argument(
         "--oasis-ckpt",
@@ -242,7 +249,7 @@ if __name__ == "__main__":
         "--num-frames",
         type=int,
         help="How many frames should the output be?",
-        default=150,
+        default=240,
     )
     parse.add_argument(
         "--actions-path",
@@ -278,7 +285,7 @@ if __name__ == "__main__":
         "--output-path",
         type=str,
         help="Path where generated video should be saved.",
-        default="outputs/video/bird-zero.mp4",
+        default="outputs/video/bird-night.mp4",
     )
     parse.add_argument(
         "--fps",

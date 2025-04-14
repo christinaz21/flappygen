@@ -1,0 +1,4 @@
+  File "train_flappy.py", line 38
+    model.learn(total_timesteps=2_000_000, checkpoint_callback)  # you can start with 200k but 1M+ is better
+                                           ^
+SyntaxError: positional argument follows keyword argument

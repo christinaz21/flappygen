@@ -11,7 +11,8 @@ import sys
 import os
 dir_path = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
 sys.path.append(dir_path)
-os.environ["CUDA_VISIBLE_DEVICES"] = "0,1" # TODO: change to your own GPU id for training
+#os.environ["CUDA_VISIBLE_DEVICES"] = "0,1" # TODO: change to your own GPU id for training
+#os.environ["CUDA_VISIBLE_DEVICES"] = "0,1" # TODO: change to your own GPU id for training
 
 from pathlib import Path
 

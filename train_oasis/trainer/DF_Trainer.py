@@ -27,6 +27,7 @@ from lightning.pytorch.utilities.types import STEP_OUTPUT
 import lightning.pytorch as pl
 from deepspeed.ops.adam import DeepSpeedCPUAdam
 import torch.distributed as dist
+import deepspeed
 
 class DiffusionForcingVideo(pl.LightningModule):
     def __init__(self, cfg: DictConfig, model_cfg: DictConfig, model_ckpt: str = None):
@@ -172,7 +173,7 @@ class DiffusionForcingVideo(pl.LightningModule):
         elif self.cfg.vae_name == "flappy_bird":
             assert self.cfg.vae_ckpt is None
             from diffusers.models import AutoencoderKL
-            self.vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-ema")
+            self.vae = AutoencoderKL.from_pretrained("./models/sd-vae-ft-ema")
             self.vae.eval()
         else:
             self.vae = None
@@ -214,6 +215,9 @@ class DiffusionForcingVideo(pl.LightningModule):
             scheduler = WarmUpScheduler(optimizer_dynamics, self.cfg)
             return [optimizer_dynamics], [{"scheduler": scheduler, "interval": "step"}]
         elif self.cfg.strategy == "deepspeed":
+            # optimizer_dynamics = torch.optim.Adam(
+            #     params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay, betas=self.cfg.optimizer_beta
+            # )
             optimizer_dynamics = DeepSpeedCPUAdam(
                 params, lr=self.cfg.lr, weight_decay=self.cfg.weight_decay, betas=self.cfg.optimizer_beta
             )
@@ -222,6 +226,27 @@ class DiffusionForcingVideo(pl.LightningModule):
             # for param_group in optimizer_dynamics.param_groups:
             #     for param in param_group["params"]:
             #         param.data = param.data.cpu()  # Move optimizer params to CPU
+            # Add explicit DeepSpeed config to allow non-DeepSpeed optimizers
+            # self, optimizer_dynamics, _, _ = deepspeed.initialize(
+            #     model=self.diffusion_model,
+            #     optimizer=optimizer_dynamics,
+            #     config_params={
+            #         # "train_batch_size": self.cfg.train_batch_size,  # Ensure batch size is set
+            #         "zero_optimization": {
+            #             "stage": 1,  # Use ZeRO Stage 1 instead of Stage 2 (no offloading)
+            #             "offload_optimizer": False,  # Ensure offloading is disabled
+            #             "reduce_bucket_size": 5e7,  # Helps prevent memory fragmentation
+            #             "overlap_comm": True,  # Speed-up communication
+            #         },
+            #         "fp16": {
+            #             "loss_scale": 0,
+            #             "loss_scale_window": 1000,
+            #             "hysteresis": 2,
+            #             "min_loss_scale": 1
+            #         }
+            #     }
+            # )
+
 
             scheduler = WarmUpScheduler(optimizer_dynamics, self.cfg)
             return [optimizer_dynamics], [{"scheduler": scheduler, "interval": "step"}]

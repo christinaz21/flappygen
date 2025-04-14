@@ -54,6 +54,8 @@ class FlappyBirdFastDataset(torch.utils.data.Dataset):
 
         self.metadata = json.load(open(self.metadata_path, "r"))
         # self.data_paths = self.get_data_paths(self.split)
+        #print("METADATA: ", self.metadata_path)
+        #print(self.metadata)
         self.data_paths = [Path(x["file"]) for x in self.metadata[self.split]]
         lengths = [x["length"] for x in self.metadata[self.split]]
         lengths = np.array(lengths)
