@@ -203,7 +203,12 @@ class DiT(nn.Module):
         # embed noise steps
         t = rearrange(t, "b t -> (b t)")
         c = self.t_embedder(t)  # (N, D)
+        # print(f"c shape: {c.shape}, x.shape: {x.shape}")
+
         c = rearrange(c, "(b t) d -> b t d", t=T)
+        # assert c.shape[0] == B * T, f"Expected c.shape[0]={B*T}, got {c.shape[0]}"
+        # T = c.shape[0] // B
+        # c = rearrange(c, "(b t) d -> b t d", b=B, t=T)
         if torch.is_tensor(external_cond):
             c += self.external_cond(external_cond)
         for block in self.blocks:
@@ -221,6 +226,19 @@ class DiT(nn.Module):
         x = rearrange(x, "(b t) c h w -> b t c h w", t=T)
 
         return x
+    
+    def inject_spatial_kv(self, k, v):
+        # for block in self.blocks:
+        #     if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
+        #         block.s_attn.set_kv_override(k, v)
+        block = self.blocks[0]
+        if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
+            block.s_attn.set_kv_override(k, v)
+
+    def clear_spatial_kv(self):
+        for block in self.blocks:
+            if hasattr(block, "s_attn") and hasattr(block.s_attn, "clear_kv_override"):
+                block.s_attn.clear_kv_override()
 
 
 def DiT_S_2():

@@ -76,14 +76,29 @@ class SpatialAxialAttention(nn.Module):
         self.rotary_emb = rotary_emb
         self.attn_drop = attn_drop
         self.scale = self.head_dim**-0.5
+        self.kv_override = None
 
     def forward(self, x: torch.Tensor):
         B, T, H, W, D = x.shape
-
+        # print("self.kv_override: ", self.kv_override is not None)
         q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-
+        # if self.kv_override is not None:
+        #     k, v = self.kv_override
+        #     q = self.to_qkv(x)[..., :self.inner_dim]
+        # else: 
+        #     q, k, v = self.to_qkv(x).chunk(3, dim=-1)
+        if self.kv_override is not None:
+            # k, v = self.kv_override
+            k_red, v_red = self.kv_override
+            k = 0.5 * k_red + 0.5 * k
+            v = 0.5 * v_red + 0.5 * v
+        
+        #print("q shape", q.shape)
+        #print("k shape", k.shape)
         q = rearrange(q, "B T H W (h d) -> (B T) h H W d", h=self.heads)
+        #print("q shape", q.shape)
         k = rearrange(k, "B T H W (h d) -> (B T) h H W d", h=self.heads)
+        #print("k shape", k.shape)
         v = rearrange(v, "B T H W (h d) -> (B T) h H W d", h=self.heads)
 
         freqs = self.rotary_emb.get_axial_freqs(H, W)
@@ -91,6 +106,8 @@ class SpatialAxialAttention(nn.Module):
         k = apply_rotary_emb(freqs, k)
 
         # prepare for attn
+        # print(f"k.shape: {k.shape}, expected B={B}, T={T}, B*T={B*T}")
+
         q = rearrange(q, "(B T) h H W d -> (B T) h (H W) d", B=B, T=T, h=self.heads)
         k = rearrange(k, "(B T) h H W d -> (B T) h (H W) d", B=B, T=T, h=self.heads)
         v = rearrange(v, "(B T) h H W d -> (B T) h (H W) d", B=B, T=T, h=self.heads)
@@ -103,6 +120,12 @@ class SpatialAxialAttention(nn.Module):
         # linear proj
         x = self.to_out(x)
         return x
+
+    def set_kv_override(self, k, v):
+        self.kv_override = (k, v)
+    
+    def clear_kv_override(self):
+        self.kv_override = None
 
 approx_gelu = lambda: nn.GELU(approximate="tanh")
 
