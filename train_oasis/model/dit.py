@@ -227,13 +227,16 @@ class DiT(nn.Module):
 
         return x
     
-    def inject_spatial_kv(self, k, v):
-        # for block in self.blocks:
-        #     if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
-        #         block.s_attn.set_kv_override(k, v)
-        block = self.blocks[0]
-        if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
-            block.s_attn.set_kv_override(k, v)
+    def inject_spatial_kv(self, ks, vs):
+        num_blocks = len(self.blocks)
+        for i, block in enumerate(self.blocks):
+            if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
+                if i >= num_blocks - 2:
+                    block.s_attn.set_kv_override(ks[i], vs[i])
+        # num_blocks = len(self.blocks)
+        # block = self.blocks[num_blocks - 1]
+        # if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
+        #     block.s_attn.set_kv_override(k, v)
 
     def clear_spatial_kv(self):
         for block in self.blocks:

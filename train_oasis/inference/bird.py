@@ -88,12 +88,12 @@ def main(args):
     # get prompt image/video
     # prompt is the yellow bird video
     action_path = Path(args.actions_path)
-    # video_path = Path("colored/videos/flappy_bird_night.mp4")
+    # video_path = Path("/scratch/gpfs/cz5047/flappy_color_data/green_1.mp4")
     #video_path = Path("colored/videos/flappy_bird_night.mp4")
     #assert video_path.exists(), f"File not found: {video_path}"
 
     prompt = read_video(action_path.with_suffix(".mp4"), pts_unit="sec")[0]
-    #prompt = read_video(video_path, pts_unit="sec")[0]
+    # prompt = read_video(video_path, pts_unit="sec")[0]
     print("prompt: ", prompt.shape)
     #print("prompt2: ", prompt2.shape)
     if args.video_offset is not None:
@@ -112,7 +112,7 @@ def main(args):
     edit = True
 
 
-    # get red bird image/video
+    # get red bird image/video and process like video prompt
     redbird_path = Path(args.redbird_path)
     assert redbird_path.exists(), f"File not found: {redbird_path}"
     redbird = read_video(redbird_path, pts_unit="sec")[0]
@@ -156,39 +156,12 @@ def main(args):
         x = vae.encode(x).latent_dist.sample() * vae.config.scaling_factor
     x = rearrange(x, "(b t) ... -> b t ...", b=B, t=n_prompt_frames)
 
+    # vae enconding for redbird
     with torch.no_grad():
         redbird = redbird * 2 - 1
         redbird_latent = vae.encode(redbird).latent_dist.sample() * vae.config.scaling_factor
     redbird_latent = rearrange(redbird_latent, "(b t) ... -> b t ...", b=B, t=n_prompt_frames)
  
-
-    # # Instead of treating time as a separate axis, merge B and T
-    # redbird_embed_in = rearrange(redbird_latent, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
-    # print("redbird_embed_in shape:", redbird_embed_in.shape)
-
-    # # Then run it through the embedding layer
-    # redbird_embed_out = model.x_embedder(redbird_embed_in)  # → shape: [B*T, D, H', W']
-    # print("redbird_embed_out shape:", redbird_embed_out.shape)
-
-    # # Now rearrange to match [B, T, H, W, D]
-    # # redbird_embed_out = rearrange(redbird_embed_out, "(b t) d h w -> b t h w d", b=B, t=n_prompt_frames)
-    # redbird_embed_out = rearrange(redbird_embed_out, "(b t) h w d -> b t h w d", t=n_prompt_frames, b=B)
-
-    # # extract keys and values using attention projection layers from model's first block
-    # with torch.no_grad():
-    #     num_blocks = 1
-    #     print("LENGTH OF BLOCKS: ", len(model.blocks))
-
-    #     for i in range(num_blocks):
-    #         block = model.blocks[i]
-    #         # redbird_latent: [B, T, H, W, C]
-    #         print("input to to_qkv:", redbird_embed_out.shape)  # should be [B, T, H, W, D]
-
-    #         qkv = block.s_attn.to_qkv(redbird_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
-    #         _, k_red, v_red = qkv.chunk(3, dim=-1)
-    #         print("qkv shape:", qkv.shape)  # should be [B*T, H, W, 3*inner_dim]
-
-
 
 
     # get alphas
@@ -227,32 +200,30 @@ def main(args):
                 actions_curr = actions[:, start_frame : max_action_index]
 
                 curr_length = x_curr.shape[1]
-                # print("x_curr shape: ", x_curr.shape)
-                # redbird_latent = redbird_latent[:, :1, :, :, :]
-                redbird_latenty = redbird_latent.repeat(1, curr_length, 1, 1, 1)  # shape: [B*T, C, H, W]
-                # print("redbird_latent shape: ", redbird_latent.shape)
-                redbird_embed_in = rearrange(redbird_latenty, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
+                redbird_latent_repeat = redbird_latent.repeat(1, curr_length, 1, 1, 1)  # shape: [B, T, C, H, W]
+                redbird_embed_in = rearrange(redbird_latent_repeat, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
                 redbird_embed_out = model.x_embedder(redbird_embed_in)
-                # Infer the time dimension dynamically instead of assuming it equals curr_length.
-                t_val = redbird_embed_out.shape[0] // B  # Effective time dimension.
+                t_val = redbird_embed_out.shape[0] // B  
                 redbird_embed_out = rearrange(redbird_embed_out, "(b t) h w d -> b t h w d", b=B, t=t_val)
 
                 # extract keys and values using attention projection layers from model's first block
                 with torch.no_grad():
-                    num_blocks = 1
+                    num_blocks = len(model.blocks)
                     # print("LENGTH OF BLOCKS: ", len(model.blocks))
-
+                    k_reds = []
+                    v_reds = []
                     for j in range(num_blocks):
                         block = model.blocks[j]
-                        # redbird_latent: [B, T, H, W, C]
                         # print("input to to_qkv:", redbird_embed_out.shape)  # should be [B, T, H, W, D]
-
+                        # get the keys and values from the first block using redbird embeddings
                         qkv = block.s_attn.to_qkv(redbird_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
                         _, k_red, v_red = qkv.chunk(3, dim=-1)
+                        k_reds.append(k_red)
+                        v_reds.append(v_red)
                         # print("qkv shape:", qkv.shape)  # should be [B*T, H, W, 3*inner_dim]
 
 
-                if edit: model.inject_spatial_kv(k_red, v_red)
+                if edit: model.inject_spatial_kv(k_reds, v_reds)
                 # # print("Injecting red bird K/V at step", noise_idx)
                 # if edit and i < n_prompt_frames + 4:  # adjust "4" to however many early frames you want to influence
                 #     model.inject_spatial_kv(k_red, v_red)
@@ -353,7 +324,7 @@ if __name__ == "__main__":
         "--redbird-path",
         type=str,
         help="File to load red bird frame",
-        default="/scratch/gpfs/cz5047/flappy_color_data/red_1.mp4",
+        default="/scratch/gpfs/cz5047/flappy_color_data/green_1.mp4",
     )
     parse.add_argument(
         "--chunk-size",
@@ -383,7 +354,7 @@ if __name__ == "__main__":
         "--output-path",
         type=str,
         help="Path where generated video should be saved.",
-        default="outputs/video/bird-red.mp4",
+        default="outputs/video/bird-green-ctrl.mp4",
     )
     parse.add_argument(
         "--fps",

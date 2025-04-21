@@ -88,10 +88,10 @@ class SpatialAxialAttention(nn.Module):
         # else: 
         #     q, k, v = self.to_qkv(x).chunk(3, dim=-1)
         if self.kv_override is not None:
-            # k, v = self.kv_override
-            k_red, v_red = self.kv_override
-            k = 0.5 * k_red + 0.5 * k
-            v = 0.5 * v_red + 0.5 * v
+            k, v = self.kv_override
+            # k_red, v_red = self.kv_override
+            # k = 0.5 * k_red + 0.5 * k
+            # v = 0.5 * v_red + 0.5 * v
         
         #print("q shape", q.shape)
         #print("k shape", k.shape)
