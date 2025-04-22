@@ -89,11 +89,12 @@ def main(args):
     # prompt is the yellow bird video
     action_path = Path(args.actions_path)
     # video_path = Path("/scratch/gpfs/cz5047/flappy_color_data/green_1.mp4")
+    video_path = Path(args.redbird_path)
     #video_path = Path("colored/videos/flappy_bird_night.mp4")
     #assert video_path.exists(), f"File not found: {video_path}"
 
     prompt = read_video(action_path.with_suffix(".mp4"), pts_unit="sec")[0]
-    # prompt = read_video(video_path, pts_unit="sec")[0]
+    prompt = read_video(video_path, pts_unit="sec")[0]
     print("prompt: ", prompt.shape)
     #print("prompt2: ", prompt2.shape)
     if args.video_offset is not None:
@@ -206,10 +207,20 @@ def main(args):
                 t_val = redbird_embed_out.shape[0] // B  
                 redbird_embed_out = rearrange(redbird_embed_out, "(b t) h w d -> b t h w d", b=B, t=t_val)
 
+                prev_latent = x_curr[:, :-args.chunk_size]  # shape: [B, T-1, C, H, W]
+                prev_latent = prev_latent[:, -n_prompt_frames:]
+                prev_embed_in = rearrange(prev_latent, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
+                prev_embed_out = model.x_embedder(prev_embed_in)  # shape: [B*T, H, W, D]
+                t_val_prev = prev_embed_out.shape[0] // B
+                prev_embed_out = rearrange(prev_embed_out, "(b t) h w d -> b t h w d", b=B, t=t_val_prev)
+
+                # this will be our anchor features
                 # extract keys and values using attention projection layers from model's first block
                 with torch.no_grad():
                     num_blocks = len(model.blocks)
                     # print("LENGTH OF BLOCKS: ", len(model.blocks))
+                    k_kv = []
+                    v_kv = []
                     k_reds = []
                     v_reds = []
                     for j in range(num_blocks):
@@ -218,12 +229,29 @@ def main(args):
                         # get the keys and values from the first block using redbird embeddings
                         qkv = block.s_attn.to_qkv(redbird_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
                         _, k_red, v_red = qkv.chunk(3, dim=-1)
+                        
+                        qkv_prev = block.s_attn.to_qkv(prev_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
+                        _, k_prev, v_prev = qkv_prev.chunk(3, dim=-1)
+
+                        k_combined = torch.cat([k_red, k_prev], dim=1)  # shape: [B, T, H, W, 3 * inner_dim]
+                        v_combined = torch.cat([v_red, v_prev], dim=1)  # shape: [B, T, H, W, 3 * inner_dim]
+
+
                         k_reds.append(k_red)
                         v_reds.append(v_red)
+                        k_kv.append(k_combined)
+                        v_kv.append(v_combined)
                         # print("qkv shape:", qkv.shape)  # should be [B*T, H, W, 3*inner_dim]
 
-
-                if edit: model.inject_spatial_kv(k_reds, v_reds)
+                # this will be our previous frames
+                
+                if edit: 
+                    if prev_latent.shape[1] < n_prompt_frames:
+                        model.inject_spatial_kv(k_reds, v_reds)
+                    else:
+                        model.inject_spatial_kv(k_kv, v_kv)
+                        
+                # if edit: model.inject_spatial_kv(k_reds, v_reds)
                 # # print("Injecting red bird K/V at step", noise_idx)
                 # if edit and i < n_prompt_frames + 4:  # adjust "4" to however many early frames you want to influence
                 #     model.inject_spatial_kv(k_red, v_red)
@@ -354,7 +382,7 @@ if __name__ == "__main__":
         "--output-path",
         type=str,
         help="Path where generated video should be saved.",
-        default="outputs/video/bird-green-ctrl.mp4",
+        default="outputs/video/bird-greentesting.mp4",
     )
     parse.add_argument(
         "--fps",

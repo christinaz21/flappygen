@@ -74,8 +74,15 @@ class SpatioTemporalDiTBlock(nn.Module):
 
         # spatial block
         s_shift_msa, s_scale_msa, s_gate_msa, s_shift_mlp, s_scale_mlp, s_gate_mlp = self.s_adaLN_modulation(c).chunk(6, dim=-1)
+
+        # x_norm_spatial = modulate(self.s_norm1(x), s_shift_msa, s_scale_msa)
+        # x_spatial = self.s_attn(x_norm_spatial, kv_override=getattr(self, 'spatial_kv_override', None))
+        # x = x + gate(x_spatial, s_gate_msa)
+
+
         x = x + gate(self.s_attn(modulate(self.s_norm1(x), s_shift_msa, s_scale_msa)), s_gate_msa)
         x = x + gate(self.s_mlp(modulate(self.s_norm2(x), s_shift_mlp, s_scale_mlp)), s_gate_mlp)
+
 
         # temporal block
         t_shift_msa, t_scale_msa, t_gate_msa, t_shift_mlp, t_scale_mlp, t_gate_mlp = self.t_adaLN_modulation(c).chunk(6, dim=-1)
@@ -231,7 +238,7 @@ class DiT(nn.Module):
         num_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
             if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
-                if i >= num_blocks - 2:
+                if i >= num_blocks // 2:
                     block.s_attn.set_kv_override(ks[i], vs[i])
         # num_blocks = len(self.blocks)
         # block = self.blocks[num_blocks - 1]

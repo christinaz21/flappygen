@@ -64,6 +64,7 @@ class SpatialAxialAttention(nn.Module):
         dim_head: int,
         rotary_emb: RotaryEmbedding,
         attn_drop: float = 0.0,
+        kv_override: bool = False,
     ):
         super().__init__()
         self.inner_dim = dim_head * heads
@@ -78,7 +79,7 @@ class SpatialAxialAttention(nn.Module):
         self.scale = self.head_dim**-0.5
         self.kv_override = None
 
-    def forward(self, x: torch.Tensor):
+    def forward(self, x: torch.Tensor, kv_override=None):
         B, T, H, W, D = x.shape
         # print("self.kv_override: ", self.kv_override is not None)
         q, k, v = self.to_qkv(x).chunk(3, dim=-1)
