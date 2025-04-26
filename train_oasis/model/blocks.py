@@ -95,11 +95,18 @@ class TimestepEmbedder(nn.Module):
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:
             embedding = torch.cat([embedding, torch.zeros_like(embedding[:, :1])], dim=-1)
-        return embedding
+        return embedding.to(dtype=dtype)
 
     def forward(self, t):
+        # print("self dtype: ", self.dtype)
         t_freq = self.timestep_embedding(t, self.frequency_embedding_size, dtype=self.dtype)
+        # print("t_freq dtype:", t_freq.dtype)
+        self.mlp = self.mlp.to(dtype=self.dtype)
+        # print("mlp weights dtype:", self.mlp[0].weight.dtype)
+
         t_emb = self.mlp(t_freq)
+
+
         return t_emb
 
 

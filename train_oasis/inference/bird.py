@@ -25,6 +25,7 @@ from train_oasis.utils import parse_flappy_bird_action
 import numpy as np
 import pickle
 from torchvision import transforms
+from diffusers.schedulers.scheduling_ddim import DDIMScheduler
 
 assert torch.cuda.is_available()
 device = torch.device("cuda:0") # TODO: change to your own GPU id for inference
@@ -110,7 +111,7 @@ def main(args):
     x = rearrange(prompt, "t c h w -> 1 t c h w")
     x = x.to(dtype=dtype)
 
-    edit = True
+    edit = False
 
 
     # get red bird image/video and process like video prompt
@@ -170,11 +171,31 @@ def main(args):
     alphas = 1.0 - betas
     alphas_cumprod = torch.cumprod(alphas, dim=0)
     alphas_cumprod = rearrange(alphas_cumprod, "T -> T 1 1 1")
+    
+    dtype = x.dtype
+    # Set scheduler for inversion
+    model.scheduler = DDIMScheduler(num_train_timesteps=1000, beta_schedule="scaled_linear")
+    model.scheduler.set_timesteps(args.ddim_steps)
+    model.scheduler.timesteps = model.scheduler.timesteps.to(dtype=dtype, device=device)
+    # model.scheduler.timesteps = model.scheduler.timesteps.to(device
+
+    # print("scheduler.timesteps dtype:", model.scheduler.timesteps.dtype)
+
+
+    # Set dummy context for now (optional)
+    dtype = x.dtype
+    # print("dtype: ", dtype)
+    # model.context = [torch.zeros(1, 77, model.blocks[0].s_attn.to_qkv.out_features // 3, device=device, dtype=dtype)] * 2
+    x_inversion = model.ddim_inversion(redbird_latent.to(dtype))
+    print("x_inversion length: ", len(x_inversion))
+    print("x_inversion shape: ", x_inversion[0].shape)
 
     # sampling loop
     if args.inference_method == "single":
         for i in tqdm(range(n_prompt_frames, total_frames, args.chunk_size)):
             chunk = torch.randn((B, args.chunk_size, *x.shape[-3:]), device=device) # (B, 1, C, H, W)
+            chunk = x_inversion[-1][:, :args.chunk_size]
+            # print("chunk shape: ", chunk.shape)
             chunk = torch.clamp(chunk, -noise_abs_max, +noise_abs_max)
             chunk = chunk.to(dtype=dtype)
             curr_len = x.shape[1]
@@ -182,6 +203,7 @@ def main(args):
             start_frame = max(0, i + args.chunk_size - model.max_frames)
 
             for noise_idx in reversed(range(1, ddim_noise_steps + 1)):
+                # print("noise_idx: ", noise_idx)
                 # set up noise values
                 t_ctx = torch.full((B, curr_len), stabilization_level - 1, dtype=torch.long, device=device)
                 t = torch.full((B, args.chunk_size), noise_range[noise_idx], dtype=torch.long, device=device)
@@ -193,7 +215,7 @@ def main(args):
                 # sliding window
                 max_index = min(start_frame + model.max_frames, total_frames)
                 x_curr = x.clone()
-                x_curr = x_curr[:, start_frame:max_index]
+                x_curr = x_curr[:, start_frame:max_index] # grabs all available frames from start:max_index
                 t = t[:, start_frame:max_index]
                 # print(t)
                 t_next = t_next[:, start_frame:max_index]
@@ -201,15 +223,22 @@ def main(args):
                 actions_curr = actions[:, start_frame : max_action_index]
 
                 curr_length = x_curr.shape[1]
-                redbird_latent_repeat = redbird_latent.repeat(1, curr_length, 1, 1, 1)  # shape: [B, T, C, H, W]
+                # print("curr_length: ", curr_length)
+                # print("redbird_latent shape: ", redbird_latent.shape)
+
+
+                redbird_latent_repeat = redbird_latent.repeat(1, curr_length // 2, 1, 1, 1)  # shape: [B, T, C, H, W]
+                # redbird_latent_repeat = x_inversion[noise_idx - 1].repeat(1, curr_length // 2, 1, 1, 1)  # shape: [B, T, C, H, W]
                 redbird_embed_in = rearrange(redbird_latent_repeat, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
                 redbird_embed_out = model.x_embedder(redbird_embed_in)
                 t_val = redbird_embed_out.shape[0] // B  
                 redbird_embed_out = rearrange(redbird_embed_out, "(b t) h w d -> b t h w d", b=B, t=t_val)
 
-                prev_latent = x_curr[:, :-args.chunk_size]  # shape: [B, T-1, C, H, W]
-                prev_latent = prev_latent[:, -n_prompt_frames:]
-                prev_embed_in = rearrange(prev_latent, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
+                prev_latent = x_curr[:, -args.chunk_size - 1 : -args.chunk_size]  # shape: [B, T-1, C, H, W]
+                # prev_latent = prev_latent[:, -n_prompt_frames:]
+                # print("prev_latent shape: ", prev_latent.shape)
+                prev_latent_repeat = prev_latent.repeat(1, curr_length - curr_length // 2, 1, 1, 1)  # shape: [B, T-1, C, H, W]
+                prev_embed_in = rearrange(prev_latent_repeat, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
                 prev_embed_out = model.x_embedder(prev_embed_in)  # shape: [B*T, H, W, D]
                 t_val_prev = prev_embed_out.shape[0] // B
                 prev_embed_out = rearrange(prev_embed_out, "(b t) h w d -> b t h w d", b=B, t=t_val_prev)
@@ -229,27 +258,27 @@ def main(args):
                         # get the keys and values from the first block using redbird embeddings
                         qkv = block.s_attn.to_qkv(redbird_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
                         _, k_red, v_red = qkv.chunk(3, dim=-1)
-                        
+                        scale_factor = 1
+                        k_red = k_red * scale_factor
+                        v_red = v_red * scale_factor
                         qkv_prev = block.s_attn.to_qkv(prev_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
                         _, k_prev, v_prev = qkv_prev.chunk(3, dim=-1)
 
+                        # print("k_red shape: ", k_red.shape)
+                        # print("k_prev shape: ", k_prev.shape)
+
                         k_combined = torch.cat([k_red, k_prev], dim=1)  # shape: [B, T, H, W, 3 * inner_dim]
                         v_combined = torch.cat([v_red, v_prev], dim=1)  # shape: [B, T, H, W, 3 * inner_dim]
-
+                        # print("k_combined shape: ", k_combined.shape)
 
                         k_reds.append(k_red)
                         v_reds.append(v_red)
                         k_kv.append(k_combined)
                         v_kv.append(v_combined)
                         # print("qkv shape:", qkv.shape)  # should be [B*T, H, W, 3*inner_dim]
+            
+                if edit: model.inject_spatial_kv(k_kv, v_kv)
 
-                # this will be our previous frames
-                
-                if edit: 
-                    if prev_latent.shape[1] < n_prompt_frames:
-                        model.inject_spatial_kv(k_reds, v_reds)
-                    else:
-                        model.inject_spatial_kv(k_kv, v_kv)
                         
                 # if edit: model.inject_spatial_kv(k_reds, v_reds)
                 # # print("Injecting red bird K/V at step", noise_idx)
@@ -259,9 +288,9 @@ def main(args):
                 # get model predictions
                 with torch.no_grad():
                     with autocast("cuda", dtype=dtype):
-                        v = model(x_curr, t, actions_curr)
+                        v = model(x_curr, t, actions_curr, redbird_latent_repeat)
 
-                model.clear_spatial_kv()
+                if edit: model.clear_spatial_kv()
 
                 if args.predict_v:
                     x_start = alphas_cumprod[t].sqrt() * x_curr - (1 - alphas_cumprod[t]).sqrt() * v

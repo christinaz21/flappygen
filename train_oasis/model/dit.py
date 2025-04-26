@@ -193,7 +193,7 @@ class DiT(nn.Module):
         imgs = x.reshape(shape=(x.shape[0], c, h * p, w * p))
         return imgs
 
-    def forward(self, x, t, external_cond=None):
+    def forward(self, x, t, external_cond=None, red_bird=None):
         """
         Forward pass of DiT.
         x: (B, T, C, H, W) tensor of spatial inputs (images or latent representations of images)
@@ -201,17 +201,27 @@ class DiT(nn.Module):
         """
 
         B, T, C, H, W = x.shape
-
+        # t = t.to(dtype=torch.long)
         # add spatial embeddings
         x = rearrange(x, "b t c h w -> (b t) c h w")
         x = self.x_embedder(x)  # (B*T, C, H, W) -> (B*T, H/2, W/2, D) , C = 16, D = d_model
         # restore shape
         x = rearrange(x, "(b t) h w d -> b t h w d", t=T)
         # embed noise steps
+        
+        if red_bird is not None:
+            red_bird = rearrange(red_bird, "b t c h w -> (b t) c h w")
+            red_bird = self.x_embedder(red_bird)  # (B*T, C, H, W) -> (B*T, H/2, W/2, D) , C = 16, D = d_model
+            # restore shape
+            red_bird = rearrange(red_bird, "(b t) h w d -> b t h w d", t=T)
+
+
         t = rearrange(t, "b t -> (b t)")
+        # print("t_embedder type: ", type(self.t_embedder))
         c = self.t_embedder(t)  # (N, D)
         # print(f"c shape: {c.shape}, x.shape: {x.shape}")
-
+        # print("c type: ", c.dtype)
+        c = c.to(x.dtype)  # cast to x dtype
         c = rearrange(c, "(b t) d -> b t d", t=T)
         # assert c.shape[0] == B * T, f"Expected c.shape[0]={B*T}, got {c.shape[0]}"
         # T = c.shape[0] // B
@@ -221,7 +231,9 @@ class DiT(nn.Module):
         for block in self.blocks:
             if self.gradient_checkpointing and self.training:
                 x = checkpoint(block, x, c, use_reentrant=False)
+                # print("using gradient checkpointing")
             else:
+                # print("not using gradient checkpointing")
                 x = block(x, c)  # (N, T, H, W, D)
         if self.gradient_checkpointing and self.training:
             x = checkpoint(self.final_layer, x, c, use_reentrant=False)
@@ -238,8 +250,8 @@ class DiT(nn.Module):
         num_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
             if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
-                if i >= num_blocks // 2:
-                    block.s_attn.set_kv_override(ks[i], vs[i])
+                # if i >= num_blocks // 2:
+                block.s_attn.set_kv_override(ks[i], vs[i])
         # num_blocks = len(self.blocks)
         # block = self.blocks[num_blocks - 1]
         # if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
@@ -250,6 +262,66 @@ class DiT(nn.Module):
             if hasattr(block, "s_attn") and hasattr(block.s_attn, "clear_kv_override"):
                 block.s_attn.clear_kv_override()
 
+    def get_noise_pred_single(self, x, t, context=None, depth=None):
+        """
+        Predicts noise ε from a noisy latent x at timestep t.
+        x: (B, T, C, H, W)
+        t: (B, T) or (B,) or scalar
+        context: (B, N, D) or None
+        depth: (B, T, 1, H, W) or None
+        """
+        # dtype = x.dtype  # get model dtype (float16 or float32)
+        t = t.to(dtype=torch.float32)
+        if depth is not None:
+            x = torch.cat([x, depth], dim=2)  # concat along channel dimension
+
+        return self.forward(x, t, external_cond=context)
+
+
+    def prev_step(self, model_output, timestep: int, sample):
+        # Ensure scalar tensors are on the same device as sample
+        timestep = timestep.to(self.scheduler.alphas_cumprod.device)
+
+        alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
+        alpha_prod_t_prev = self.scheduler.alphas_cumprod[
+            timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
+        ] if timestep >= self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps else self.scheduler.final_alpha_cumprod
+
+        beta_prod_t = 1 - alpha_prod_t
+
+        # 🛠 Move to sample device and dtype to avoid mismatch
+        alpha_prod_t = alpha_prod_t.to(device=sample.device, dtype=sample.dtype)
+        alpha_prod_t_prev = alpha_prod_t_prev.to(device=sample.device, dtype=sample.dtype)
+        beta_prod_t = beta_prod_t.to(device=sample.device, dtype=sample.dtype)
+
+        pred_original_sample = (sample - beta_prod_t.sqrt() * model_output) / alpha_prod_t.sqrt()
+        pred_sample_direction = (1 - alpha_prod_t_prev).sqrt() * model_output
+        prev_sample = alpha_prod_t_prev.sqrt() * pred_original_sample + pred_sample_direction
+
+        return prev_sample, pred_original_sample
+
+
+
+    @torch.no_grad()
+    def ddim_inversion(self, x0, context=None, depth=None):
+        x = x0.clone()
+        dtype = x.dtype  # get model dtype (float16 or float32)
+        latents = []
+        for timestep in reversed(self.scheduler.timesteps):
+            t = torch.full((x.shape[0], x.shape[1]), timestep, dtype=torch.long, device=x.device)
+
+            # t = t.to(dtype=self.dtype)
+
+            if depth is not None:
+                depth = depth.to(dtype=dtype)
+            if context is not None:
+                context = context.to(dtype=dtype)
+                
+            eps = self.get_noise_pred_single(x, t, context=context, depth=depth)
+            x_prev, x0_pred = self.prev_step(eps, t, x)
+            latents.append(x_prev)
+            x = x_prev
+        return latents[::-1]
 
 def DiT_S_2():
     return DiT(

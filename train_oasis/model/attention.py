@@ -90,10 +90,12 @@ class SpatialAxialAttention(nn.Module):
         #     q, k, v = self.to_qkv(x).chunk(3, dim=-1)
         if self.kv_override is not None:
             k, v = self.kv_override
+            
             # k_red, v_red = self.kv_override
             # k = 0.5 * k_red + 0.5 * k
             # v = 0.5 * v_red + 0.5 * v
-        
+        b_k, t_k, h_k, w_k, d_k = k.shape
+
         #print("q shape", q.shape)
         #print("k shape", k.shape)
         q = rearrange(q, "B T H W (h d) -> (B T) h H W d", h=self.heads)
@@ -110,11 +112,20 @@ class SpatialAxialAttention(nn.Module):
         # print(f"k.shape: {k.shape}, expected B={B}, T={T}, B*T={B*T}")
 
         q = rearrange(q, "(B T) h H W d -> (B T) h (H W) d", B=B, T=T, h=self.heads)
-        k = rearrange(k, "(B T) h H W d -> (B T) h (H W) d", B=B, T=T, h=self.heads)
-        v = rearrange(v, "(B T) h H W d -> (B T) h (H W) d", B=B, T=T, h=self.heads)
+        k = rearrange(k, "(B T) h H W d -> (B T) h (H W) d", B=b_k, T=t_k, h=self.heads)
+        v = rearrange(v, "(B T) h H W d -> (B T) h (H W) d", B=b_k, T=t_k, h=self.heads)
         
-        x = F.scaled_dot_product_attention(query=q, key=k, value=v, is_causal=False)
+        # q = rearrange(q, "(B T) h Hw d -> B T h Hw d", B=B, T=T, h=self.heads)
+        # k = rearrange(k, "(B T) h Hw d -> B T h Hw d", B=b_k, T=t_k, h=self.heads)
+        # v = rearrange(v, "(B T) h Hw d -> B T h Hw d", B=b_k, T=t_k, h=self.heads)
+        
+        # print(q.shape, k.shape, v.shape)
+        # print("q shape:", q.shape)
+        # print("k shape:", k.shape)
+        # print("v shape:", v.shape)
 
+        x = F.scaled_dot_product_attention(query=q, key=k, value=v, is_causal=False)
+        
         x = rearrange(x, "(B T) h (H W) d -> B T H W (h d)", B=B, H=H, W=W)
         x = x.type_as(q)
 
