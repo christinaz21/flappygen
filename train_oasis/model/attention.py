@@ -79,17 +79,26 @@ class SpatialAxialAttention(nn.Module):
         self.scale = self.head_dim**-0.5
         self.kv_override = None
 
-    def forward(self, x: torch.Tensor, kv_override=None):
+    def forward(self, x: torch.Tensor, kv_override=None, red_bird=None):
         B, T, H, W, D = x.shape
+        
         # print("self.kv_override: ", self.kv_override is not None)
         q, k, v = self.to_qkv(x).chunk(3, dim=-1)
+
         # if self.kv_override is not None:
         #     k, v = self.kv_override
         #     q = self.to_qkv(x)[..., :self.inner_dim]
         # else: 
         #     q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-        if self.kv_override is not None:
-            k, v = self.kv_override
+
+        # if self.kv_override is not None:
+        #     k, v = self.kv_override
+        
+
+        if red_bird is not None: 
+            q_red, k_red, v_red = self.to_qkv(red_bird).chunk(3, dim=-1)
+            k = k_red
+            v = v_red
             
             # k_red, v_red = self.kv_override
             # k = 0.5 * k_red + 0.5 * k
@@ -115,10 +124,7 @@ class SpatialAxialAttention(nn.Module):
         k = rearrange(k, "(B T) h H W d -> (B T) h (H W) d", B=b_k, T=t_k, h=self.heads)
         v = rearrange(v, "(B T) h H W d -> (B T) h (H W) d", B=b_k, T=t_k, h=self.heads)
         
-        # q = rearrange(q, "(B T) h Hw d -> B T h Hw d", B=B, T=T, h=self.heads)
-        # k = rearrange(k, "(B T) h Hw d -> B T h Hw d", B=b_k, T=t_k, h=self.heads)
-        # v = rearrange(v, "(B T) h Hw d -> B T h Hw d", B=b_k, T=t_k, h=self.heads)
-        
+
         # print(q.shape, k.shape, v.shape)
         # print("q shape:", q.shape)
         # print("k shape:", k.shape)

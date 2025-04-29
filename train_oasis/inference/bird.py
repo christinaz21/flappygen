@@ -23,6 +23,7 @@ from deepspeed.utils.zero_to_fp32 import get_fp32_state_dict_from_zero_checkpoin
 from pathlib import Path
 from train_oasis.utils import parse_flappy_bird_action
 import numpy as np
+from PIL import Image
 import pickle
 from torchvision import transforms
 from diffusers.schedulers.scheduling_ddim import DDIMScheduler
@@ -166,6 +167,12 @@ def main(args):
  
 
 
+
+
+    redbird_frame = (redbird_latent[0,0] * 255).clamp(0,255).byte().cpu().numpy()  # (C, H, W) → uint8
+    redbird_frame = redbird_frame.transpose(1,2,0)                          # to (H, W, C)
+    # Image.fromarray(redbird_frame).save("outputs/video/frame0_decoded.png")
+
     # get alphas
     betas = sigmoid_beta_schedule(max_noise_level).float().to(device, dtype=dtype)
     alphas = 1.0 - betas
@@ -180,22 +187,36 @@ def main(args):
     # model.scheduler.timesteps = model.scheduler.timesteps.to(device
 
     # print("scheduler.timesteps dtype:", model.scheduler.timesteps.dtype)
+    # redbird_latent = redbird_latent.to(dtype=dtype)
+    redbird_inv = model.ddim_inversion(redbird_latent.to(dtype))
+    print("redbird_inv length: ", len(redbird_inv))
+
+    redbird_frame = (redbird_inv[-1][0,0] * 255).clamp(0,255).byte().cpu().numpy()  # (C, H, W) → uint8
+    redbird_frame = redbird_frame.transpose(1,2,0)                          # to (H, W, C)
+    Image.fromarray(redbird_frame).save("outputs/video/frame1_decoded.png")
 
 
     # Set dummy context for now (optional)
     dtype = x.dtype
     # print("dtype: ", dtype)
     # model.context = [torch.zeros(1, 77, model.blocks[0].s_attn.to_qkv.out_features // 3, device=device, dtype=dtype)] * 2
-    x_inversion = model.ddim_inversion(redbird_latent.to(dtype))
-    print("x_inversion length: ", len(x_inversion))
-    print("x_inversion shape: ", x_inversion[0].shape)
-
+    # x_inversion = model.ddim_inversion(redbird_latent.to(dtype))
+    # print("x_inversion length: ", len(x_inversion))
+    # print("x_inversion shape: ", x_inversion[0].shape)
+    count = 0
     # sampling loop
     if args.inference_method == "single":
         for i in tqdm(range(n_prompt_frames, total_frames, args.chunk_size)):
-            chunk = torch.randn((B, args.chunk_size, *x.shape[-3:]), device=device) # (B, 1, C, H, W)
-            chunk = x_inversion[-1][:, :args.chunk_size]
+            chunk = torch.randn((B, args.chunk_size, *x.shape[-3:]), device=device) # (B, 1, C, H, W) 
+            # if count == 0:
+            #     chunk_frame = (chunk[0,0] * 255).clamp(0,255).byte().cpu().numpy()  # (C, H, W) → uint8
+            #     chunk_frame = chunk_frame.transpose(1,2,0)                          # to (H, W, C)
+            #     Image.fromarray(chunk_frame).save("outputs/video/chunk_decoded.png")
+            #     count += 1
+
             # print("chunk shape: ", chunk.shape)
+            # chunk = redbird_inv[-1][:, :args.chunk_size] # ddim inversion from the redbird reference
+            # chunk = chunk.repeat(1, args.chunk_size, 1, 1, 1)
             chunk = torch.clamp(chunk, -noise_abs_max, +noise_abs_max)
             chunk = chunk.to(dtype=dtype)
             curr_len = x.shape[1]
@@ -227,7 +248,9 @@ def main(args):
                 # print("redbird_latent shape: ", redbird_latent.shape)
 
 
-                redbird_latent_repeat = redbird_latent.repeat(1, curr_length // 2, 1, 1, 1)  # shape: [B, T, C, H, W]
+                # redbird_latent_repeat = redbird_latent.repeat(1, curr_length // 2, 1, 1, 1)  # shape: [B, T, C, H, W]
+                redbird_latent_repeat = redbird_inv[noise_idx - 1].repeat(1, curr_length, 1, 1, 1)  # shape: [B, T, C, H, W]
+                # redbird_latent_repeat = redbird_latent.repeat(1, curr_length, 1, 1, 1)  # shape: [B, T, C, H, W]
                 # redbird_latent_repeat = x_inversion[noise_idx - 1].repeat(1, curr_length // 2, 1, 1, 1)  # shape: [B, T, C, H, W]
                 redbird_embed_in = rearrange(redbird_latent_repeat, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
                 redbird_embed_out = model.x_embedder(redbird_embed_in)
@@ -289,6 +312,7 @@ def main(args):
                 with torch.no_grad():
                     with autocast("cuda", dtype=dtype):
                         v = model(x_curr, t, actions_curr, redbird_latent_repeat)
+                        # v = model(x_curr, t, actions_curr)
 
                 if edit: model.clear_spatial_kv()
 

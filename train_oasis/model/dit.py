@@ -5,7 +5,7 @@ References:
     - Latte: https://github.com/Vchitect/Latte/blob/main/models/latte.py
 """
 
-from typing import Optional
+from typing import Optional, List
 import torch
 from torch import nn
 from train_oasis.model.rotary_embedding_torch import RotaryEmbedding
@@ -69,18 +69,15 @@ class SpatioTemporalDiTBlock(nn.Module):
         )
         self.t_adaLN_modulation = nn.Sequential(nn.SiLU(), nn.Linear(hidden_size, 6 * hidden_size, bias=True))
 
-    def forward(self, x, c):
+    def forward(self, x, c, red_bird=None):
         B, T, H, W, D = x.shape
 
         # spatial block
         s_shift_msa, s_scale_msa, s_gate_msa, s_shift_mlp, s_scale_mlp, s_gate_mlp = self.s_adaLN_modulation(c).chunk(6, dim=-1)
-
-        # x_norm_spatial = modulate(self.s_norm1(x), s_shift_msa, s_scale_msa)
-        # x_spatial = self.s_attn(x_norm_spatial, kv_override=getattr(self, 'spatial_kv_override', None))
-        # x = x + gate(x_spatial, s_gate_msa)
-
-
-        x = x + gate(self.s_attn(modulate(self.s_norm1(x), s_shift_msa, s_scale_msa)), s_gate_msa)
+        if red_bird is not None:
+            x = x + gate(self.s_attn(modulate(self.s_norm1(x), s_shift_msa, s_scale_msa), red_bird=modulate(self.s_norm1(red_bird), s_shift_msa, s_scale_msa)), s_gate_msa)
+        else:
+            x = x + gate(self.s_attn(modulate(self.s_norm1(x), s_shift_msa, s_scale_msa)), s_gate_msa)
         x = x + gate(self.s_mlp(modulate(self.s_norm2(x), s_shift_mlp, s_scale_mlp)), s_gate_mlp)
 
 
@@ -223,18 +220,21 @@ class DiT(nn.Module):
         # print("c type: ", c.dtype)
         c = c.to(x.dtype)  # cast to x dtype
         c = rearrange(c, "(b t) d -> b t d", t=T)
-        # assert c.shape[0] == B * T, f"Expected c.shape[0]={B*T}, got {c.shape[0]}"
-        # T = c.shape[0] // B
-        # c = rearrange(c, "(b t) d -> b t d", b=B, t=T)
+
         if torch.is_tensor(external_cond):
             c += self.external_cond(external_cond)
-        for block in self.blocks:
+        for i, block in enumerate(self.blocks):
+            num_blocks = len(self.blocks)
             if self.gradient_checkpointing and self.training:
                 x = checkpoint(block, x, c, use_reentrant=False)
                 # print("using gradient checkpointing")
             else:
                 # print("not using gradient checkpointing")
-                x = block(x, c)  # (N, T, H, W, D)
+                # THIS IS THE PART CONTROLLING WHICH BLOCKS WE INJECT INTO
+                if (i  >= num_blocks / 2 ) and red_bird is not None:
+                    x = block(x, c, red_bird=red_bird)
+                else:
+                    x = block(x, c) # (N, T, H, W, D)
         if self.gradient_checkpointing and self.training:
             x = checkpoint(self.final_layer, x, c, use_reentrant=False)
         else:
@@ -262,66 +262,61 @@ class DiT(nn.Module):
             if hasattr(block, "s_attn") and hasattr(block.s_attn, "clear_kv_override"):
                 block.s_attn.clear_kv_override()
 
-    def get_noise_pred_single(self, x, t, context=None, depth=None):
-        """
-        Predicts noise ε from a noisy latent x at timestep t.
-        x: (B, T, C, H, W)
-        t: (B, T) or (B,) or scalar
-        context: (B, N, D) or None
-        depth: (B, T, 1, H, W) or None
-        """
-        # dtype = x.dtype  # get model dtype (float16 or float32)
-        t = t.to(dtype=torch.float32)
-        if depth is not None:
-            x = torch.cat([x, depth], dim=2)  # concat along channel dimension
-
-        return self.forward(x, t, external_cond=context)
-
-
-    def prev_step(self, model_output, timestep: int, sample):
-        # Ensure scalar tensors are on the same device as sample
-        timestep = timestep.to(self.scheduler.alphas_cumprod.device)
-
-        alpha_prod_t = self.scheduler.alphas_cumprod[timestep]
-        alpha_prod_t_prev = self.scheduler.alphas_cumprod[
-            timestep - self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps
-        ] if timestep >= self.scheduler.config.num_train_timesteps // self.scheduler.num_inference_steps else self.scheduler.final_alpha_cumprod
-
-        beta_prod_t = 1 - alpha_prod_t
-
-        # 🛠 Move to sample device and dtype to avoid mismatch
-        alpha_prod_t = alpha_prod_t.to(device=sample.device, dtype=sample.dtype)
-        alpha_prod_t_prev = alpha_prod_t_prev.to(device=sample.device, dtype=sample.dtype)
-        beta_prod_t = beta_prod_t.to(device=sample.device, dtype=sample.dtype)
-
-        pred_original_sample = (sample - beta_prod_t.sqrt() * model_output) / alpha_prod_t.sqrt()
-        pred_sample_direction = (1 - alpha_prod_t_prev).sqrt() * model_output
-        prev_sample = alpha_prod_t_prev.sqrt() * pred_original_sample + pred_sample_direction
-
-        return prev_sample, pred_original_sample
-
 
 
     @torch.no_grad()
-    def ddim_inversion(self, x0, context=None, depth=None):
-        x = x0.clone()
-        dtype = x.dtype  # get model dtype (float16 or float32)
-        latents = []
-        for timestep in reversed(self.scheduler.timesteps):
-            t = torch.full((x.shape[0], x.shape[1]), timestep, dtype=torch.long, device=x.device)
+    def ddim_inversion(
+        self,
+        x_start: torch.Tensor,
+        external_cond: Optional[torch.Tensor] = None
+    ) -> List[torch.Tensor]:
+        """
+        Given a clean latent x_start of shape (B, T, C, H, W),
+        walk it through the DDIM noise levels from t=0 → t=T,
+        returning [x_0, x_t1, x_t2, …, x_T].
+        Requires that you have done:
+            model.scheduler = DDIMScheduler(...)
+            model.scheduler.set_timesteps(ddim_steps)
+        """
+        scheduler = self.scheduler
+        # scheduler.timesteps is a torch Tensor [T, ..., 0]
+        # flip it so we go from 0 → T
+        inv_ts = scheduler.timesteps.flip(0)
 
-            # t = t.to(dtype=self.dtype)
+        latents = [x_start]
+        x_t = x_start
+        for idx, t in enumerate(inv_ts):
+            # prepare a per‐frame timestep tensor
+            B, seq_len = x_t.shape[0], x_t.shape[1]
+            t_tensor = torch.full((B, seq_len), int(t), device=x_t.device, dtype=torch.long)
 
-            if depth is not None:
-                depth = depth.to(dtype=dtype)
-            if context is not None:
-                context = context.to(dtype=dtype)
-                
-            eps = self.get_noise_pred_single(x, t, context=context, depth=depth)
-            x_prev, x0_pred = self.prev_step(eps, t, x)
-            latents.append(x_prev)
-            x = x_prev
-        return latents[::-1]
+            # 1) predict the noise residual (ε) at this step
+            eps = self(x_t, t_tensor, external_cond)
+
+            # 2) fetch the cumulative α up to t
+            alpha_t = scheduler.alphas_cumprod[int(t)]
+            sqrt_alpha_t = alpha_t.sqrt()
+            sqrt_om_alpha_t = (1 - alpha_t).sqrt()
+
+            # 3) estimate the clean latent from this noisy x_t
+            x0_pred = (x_t - sqrt_om_alpha_t * eps) / sqrt_alpha_t
+
+            # 4) if this is the last step, we’re done
+            if idx == len(inv_ts) - 1:
+                break
+
+            # 5) build the next noisy latent at t_next
+            t_next = inv_ts[idx + 1]
+            alpha_next = scheduler.alphas_cumprod[int(t_next)]
+            sqrt_alpha_next = alpha_next.sqrt()
+            sqrt_om_alpha_next = (1 - alpha_next).sqrt()
+
+            x_t = sqrt_alpha_next * x0_pred + sqrt_om_alpha_next * eps
+            latents.append(x_t)
+
+        return latents
+
+
 
 def DiT_S_2():
     return DiT(
