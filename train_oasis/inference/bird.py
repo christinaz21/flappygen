@@ -195,14 +195,8 @@ def main(args):
     redbird_frame = redbird_frame.transpose(1,2,0)                          # to (H, W, C)
     Image.fromarray(redbird_frame).save("outputs/video/frame1_decoded.png")
 
-
-    # Set dummy context for now (optional)
     dtype = x.dtype
-    # print("dtype: ", dtype)
-    # model.context = [torch.zeros(1, 77, model.blocks[0].s_attn.to_qkv.out_features // 3, device=device, dtype=dtype)] * 2
-    # x_inversion = model.ddim_inversion(redbird_latent.to(dtype))
-    # print("x_inversion length: ", len(x_inversion))
-    # print("x_inversion shape: ", x_inversion[0].shape)
+ 
     count = 0
     # sampling loop
     if args.inference_method == "single":
@@ -257,56 +251,6 @@ def main(args):
                 t_val = redbird_embed_out.shape[0] // B  
                 redbird_embed_out = rearrange(redbird_embed_out, "(b t) h w d -> b t h w d", b=B, t=t_val)
 
-                prev_latent = x_curr[:, -args.chunk_size - 1 : -args.chunk_size]  # shape: [B, T-1, C, H, W]
-                # prev_latent = prev_latent[:, -n_prompt_frames:]
-                # print("prev_latent shape: ", prev_latent.shape)
-                prev_latent_repeat = prev_latent.repeat(1, curr_length - curr_length // 2, 1, 1, 1)  # shape: [B, T-1, C, H, W]
-                prev_embed_in = rearrange(prev_latent_repeat, "b t c h w -> (b t) c h w")  # shape: [B*T, C, H, W]
-                prev_embed_out = model.x_embedder(prev_embed_in)  # shape: [B*T, H, W, D]
-                t_val_prev = prev_embed_out.shape[0] // B
-                prev_embed_out = rearrange(prev_embed_out, "(b t) h w d -> b t h w d", b=B, t=t_val_prev)
-
-                # this will be our anchor features
-                # extract keys and values using attention projection layers from model's first block
-                with torch.no_grad():
-                    num_blocks = len(model.blocks)
-                    # print("LENGTH OF BLOCKS: ", len(model.blocks))
-                    k_kv = []
-                    v_kv = []
-                    k_reds = []
-                    v_reds = []
-                    for j in range(num_blocks):
-                        block = model.blocks[j]
-                        # print("input to to_qkv:", redbird_embed_out.shape)  # should be [B, T, H, W, D]
-                        # get the keys and values from the first block using redbird embeddings
-                        qkv = block.s_attn.to_qkv(redbird_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
-                        _, k_red, v_red = qkv.chunk(3, dim=-1)
-                        scale_factor = 1
-                        k_red = k_red * scale_factor
-                        v_red = v_red * scale_factor
-                        qkv_prev = block.s_attn.to_qkv(prev_embed_out)  # shape: [B, T, H, W, 3 * inner_dim]
-                        _, k_prev, v_prev = qkv_prev.chunk(3, dim=-1)
-
-                        # print("k_red shape: ", k_red.shape)
-                        # print("k_prev shape: ", k_prev.shape)
-
-                        k_combined = torch.cat([k_red, k_prev], dim=1)  # shape: [B, T, H, W, 3 * inner_dim]
-                        v_combined = torch.cat([v_red, v_prev], dim=1)  # shape: [B, T, H, W, 3 * inner_dim]
-                        # print("k_combined shape: ", k_combined.shape)
-
-                        k_reds.append(k_red)
-                        v_reds.append(v_red)
-                        k_kv.append(k_combined)
-                        v_kv.append(v_combined)
-                        # print("qkv shape:", qkv.shape)  # should be [B*T, H, W, 3*inner_dim]
-            
-                if edit: model.inject_spatial_kv(k_kv, v_kv)
-
-                        
-                # if edit: model.inject_spatial_kv(k_reds, v_reds)
-                # # print("Injecting red bird K/V at step", noise_idx)
-                # if edit and i < n_prompt_frames + 4:  # adjust "4" to however many early frames you want to influence
-                #     model.inject_spatial_kv(k_red, v_red)
 
                 # get model predictions
                 with torch.no_grad():

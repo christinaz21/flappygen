@@ -81,18 +81,9 @@ class SpatialAxialAttention(nn.Module):
 
     def forward(self, x: torch.Tensor, kv_override=None, red_bird=None):
         B, T, H, W, D = x.shape
-        
+
         # print("self.kv_override: ", self.kv_override is not None)
         q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-
-        # if self.kv_override is not None:
-        #     k, v = self.kv_override
-        #     q = self.to_qkv(x)[..., :self.inner_dim]
-        # else: 
-        #     q, k, v = self.to_qkv(x).chunk(3, dim=-1)
-
-        # if self.kv_override is not None:
-        #     k, v = self.kv_override
         
 
         if red_bird is not None: 
@@ -100,9 +91,9 @@ class SpatialAxialAttention(nn.Module):
             k = k_red
             v = v_red
             
-            # k_red, v_red = self.kv_override
             # k = 0.5 * k_red + 0.5 * k
             # v = 0.5 * v_red + 0.5 * v
+            
         b_k, t_k, h_k, w_k, d_k = k.shape
 
         #print("q shape", q.shape)

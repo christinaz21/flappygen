@@ -246,6 +246,7 @@ class DiT(nn.Module):
 
         return x
     
+    # not used anymore
     def inject_spatial_kv(self, ks, vs):
         num_blocks = len(self.blocks)
         for i, block in enumerate(self.blocks):
@@ -257,6 +258,7 @@ class DiT(nn.Module):
         # if hasattr(block, "s_attn") and hasattr(block.s_attn, "set_kv_override"):
         #     block.s_attn.set_kv_override(k, v)
 
+    # not used anymore
     def clear_spatial_kv(self):
         for block in self.blocks:
             if hasattr(block, "s_attn") and hasattr(block.s_attn, "clear_kv_override"):
